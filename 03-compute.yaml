@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Compute - Launch Template and Auto Scaling Group
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: ha-nginx
+
+  Environment:
+    Type: String
+    Default: dev
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+
+  MinSize:
+    Type: Number
+    Default: 2
+
+  MaxSize:
+    Type: Number
+    Default: 4
+
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+
+  DockerImage:
+    Type: String
+    Default: ghcr.io/shamindergarg/ha-nginx:latest
+
+Resources:
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-${Environment}-profile"
+      Roles:
+        - !Ref EC2Role
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ProjectName}-${Environment}-lt"
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            Groups:
+              - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-EC2SgId"
+        UserData:
+          Fn::Base64:
+            !Sub |
+              #!/bin/bash
+              yum update -y
+              yum install -y docker
+              systemctl enable docker
+              systemctl start docker
+              docker pull ${DockerImage}
+              docker run -d --name nginx --restart unless-stopped -p 80:80 ${DockerImage}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${ProjectName}-${Environment}-instance"
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref Environment
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${ProjectName}-${Environment}-asg"
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-Subnet1Id"
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-Subnet2Id"
+      TargetGroupARNs:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-TargetGroupArn"
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 60
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-asg"
+          PropagateAtLaunch: false
+        - Key: Project
+          Value: !Ref ProjectName
+          PropagateAtLaunch: false
+        - Key: Environment
+          Value: !Ref Environment
+          PropagateAtLaunch: false
+
+Outputs:
+  ASGName:
+    Value: !Ref AutoScalingGroup
