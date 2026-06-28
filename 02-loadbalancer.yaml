@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Load Balancer - ALB, Target Group, Listener
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: ha-nginx
+
+  Environment:
+    Type: String
+    Default: dev
+
+Resources:
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-alb"
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-ALBSgId"
+      Subnets:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-Subnet1Id"
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-Subnet2Id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-alb"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-tg"
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-VpcId"
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-tg"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ALBDnsName:
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ALBDnsName"
+
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-TargetGroupArn"
